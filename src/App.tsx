@@ -5,8 +5,9 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Type, RefreshCw, Download, Settings2, Info, Image as ImageIcon, FileCode, FileJson, X } from 'lucide-react';
+import { Type, RefreshCw, Download, Settings2, Info, Image as ImageIcon, FileCode, FileJson, X, Wand2, Loader2, Sparkles } from 'lucide-react';
 import * as htmlToImage from 'html-to-image';
+import { generateMushedFont, FontMap } from './services/generativeFontService';
 
 const FONTS = [
   'Inter',
@@ -84,14 +85,22 @@ interface LetterProps {
   char: string;
   index: number;
   kerning: number;
+  initialFont?: string;
+  generativeGlyph?: { path: string; width: number };
   key?: string;
 }
 
-const Letter = ({ char, index, kerning }: LetterProps) => {
-  const [font, setFont] = useState('Inter');
+const Letter = ({ char, index, kerning, initialFont, generativeGlyph }: LetterProps) => {
+  const [font, setFont] = useState(initialFont || 'Inter');
   const [color, setColor] = useState('#1a1a1a');
   const [weight, setWeight] = useState(400);
   const [isHovered, setIsHovered] = useState(false);
+
+  useEffect(() => {
+    if (!isHovered && initialFont) {
+      setFont(initialFont);
+    }
+  }, [initialFont, isHovered]);
 
   const morph = useCallback(() => {
     const randomFont = FONTS[Math.floor(Math.random() * FONTS.length)];
@@ -115,6 +124,37 @@ const Letter = ({ char, index, kerning }: LetterProps) => {
   }, [isHovered, morph]);
 
   if (char === ' ') return <span className="inline-block w-[0.3em]">&nbsp;</span>;
+  
+  if (generativeGlyph && !isHovered) {
+    return (
+      <motion.span
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        animate={{
+          color: color,
+          letterSpacing: `${kerning}em`,
+          scale: isHovered ? 1.1 : 1,
+        }}
+        className="relative inline-block cursor-default select-none transition-all"
+        style={{ 
+          width: `${(generativeGlyph.width || 60) / 100}em`, 
+          height: '1em',
+          verticalAlign: 'middle',
+          minWidth: '0.5em'
+        }}
+      >
+        <svg 
+          viewBox="0 0 100 100" 
+          className="absolute inset-0 w-full h-full fill-current"
+          style={{ color }}
+          preserveAspectRatio="xMidYMid meet"
+        >
+          <path d={generativeGlyph.path} />
+        </svg>
+      </motion.span>
+    );
+  }
+
 
   return (
     <motion.span
@@ -160,13 +200,68 @@ export default function App() {
   const [showControls, setShowControls] = useState(true);
   const [resetKey, setResetKey] = useState(0);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [customFontMap, setCustomFontMap] = useState<Record<string, string>>({});
+  const [isCustomFontActive, setIsCustomFontActive] = useState(false);
+  const [generativeFontMap, setGenerativeFontMap] = useState<FontMap | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
   
   const textContainerRef = useRef<HTMLDivElement>(null);
+
+  const generateRandomFontMap = () => {
+    const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;':\",./<>? ".split("");
+    const newMap: Record<string, string> = {};
+    chars.forEach(char => {
+      newMap[char] = FONTS[Math.floor(Math.random() * FONTS.length)];
+    });
+    setCustomFontMap(newMap);
+    setIsCustomFontActive(true);
+    setGenerativeFontMap(null);
+  };
+
+  const handleGenerateAIFont = async () => {
+    if (!text.trim()) return;
+    setIsGenerating(true);
+    try {
+      const fontMap = await generateMushedFont(FONTS, text);
+      if (Object.keys(fontMap).length > 0) {
+        setGenerativeFontMap(prev => ({ ...prev, ...fontMap }));
+        setIsCustomFontActive(false);
+      } else {
+        // Better Fallback: Use the "Random Collection" logic if AI fails
+        const fallbackMap: Record<string, string> = {};
+        text.split('').forEach(char => {
+          if (char === ' ') return;
+          fallbackMap[char] = FONTS[Math.floor(Math.random() * FONTS.length)];
+        });
+        setCustomFontMap(fallbackMap);
+        setIsCustomFontActive(true);
+        setGenerativeFontMap(null);
+        console.warn("AI font generation failed, falling back to random collection.");
+      }
+    } catch (error) {
+      console.error("Font generation failed:", error);
+      alert("An error occurred while generating the font.");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const downloadFontMap = () => {
+    const data = JSON.stringify(generativeFontMap || customFontMap, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.download = `mushed-font-recipe-${Date.now()}.json`;
+    link.href = URL.createObjectURL(blob);
+    link.click();
+  };
 
   const handleReset = () => {
     setText('Type Morph');
     setFontSize(120);
     setKerning(0);
+    setIsCustomFontActive(false);
+    setCustomFontMap({});
+    setGenerativeFontMap(null);
     setResetKey(prev => prev + 1);
   };
 
@@ -304,7 +399,14 @@ export default function App() {
           style={{ fontSize: `${fontSize}px` }}
         >
           {text.split('').map((char: string, i: number) => (
-            <Letter key={`${resetKey}-${i}-${char}`} char={char} index={i} kerning={kerning} />
+            <Letter 
+              key={`${resetKey}-${i}-${char}`} 
+              char={char} 
+              index={i} 
+              kerning={kerning} 
+              initialFont={isCustomFontActive ? customFontMap[char] : undefined}
+              generativeGlyph={generativeFontMap?.[char]}
+            />
           ))}
         </div>
 
@@ -317,32 +419,32 @@ export default function App() {
               exit={{ y: 100, opacity: 0 }}
               className="fixed bottom-12 left-1/2 -translate-x-1/2 w-full max-w-2xl px-6 z-30"
             >
-              <div className="bg-white border border-black/10 shadow-2xl rounded-3xl p-6 backdrop-blur-xl">
-                <div className="flex flex-col gap-6">
+              <div className="bg-white border border-black/10 shadow-2xl rounded-3xl p-3 backdrop-blur-xl">
+                <div className="flex flex-col gap-3">
                   <div className="flex items-center gap-4">
                     <div className="flex-1">
-                      <label className="text-[10px] font-bold uppercase tracking-widest text-black/40 mb-2 block">Input Text</label>
+                      <label className="text-[9px] font-bold uppercase tracking-widest text-black/30 mb-1 block">Input Text</label>
                       <input 
                         type="text" 
                         value={text}
                         onChange={(e) => setText(e.target.value)}
                         placeholder="Type something..."
-                        className="w-full bg-black/5 border-none rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-black/5 transition-all outline-none"
+                        className="w-full bg-black/5 border-none rounded-xl px-4 py-2 text-sm font-medium focus:ring-2 focus:ring-black/5 transition-all outline-none"
                       />
                     </div>
-                    <div className="w-32">
-                      <label className="text-[10px] font-bold uppercase tracking-widest text-black/40 mb-2 block">Size: {fontSize}px</label>
+                    <div className="w-28">
+                      <label className="text-[9px] font-bold uppercase tracking-widest text-black/30 mb-1 block">Size: {fontSize}px</label>
                       <input 
                         type="range" 
                         min="20" 
                         max="300" 
                         value={fontSize}
                         onChange={(e) => setFontSize(parseInt(e.target.value))}
-                        className="w-full accent-black"
+                        className="w-full accent-black h-1.5"
                       />
                     </div>
-                    <div className="w-32">
-                      <label className="text-[10px] font-bold uppercase tracking-widest text-black/40 mb-2 block">Kerning: {kerning}em</label>
+                    <div className="w-28">
+                      <label className="text-[9px] font-bold uppercase tracking-widest text-black/30 mb-1 block">Kerning: {kerning}em</label>
                       <input 
                         type="range" 
                         min="-0.1" 
@@ -350,23 +452,53 @@ export default function App() {
                         step="0.01"
                         value={kerning}
                         onChange={(e) => setKerning(parseFloat(e.target.value))}
-                        className="w-full accent-black"
+                        className="w-full accent-black h-1.5"
                       />
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between pt-4 border-t border-black/5">
-                    <div className="flex gap-2">
-                      {COLORS.map(c => (
-                        <div key={c} className="w-4 h-4 rounded-full border border-black/10" style={{ backgroundColor: c }} />
-                      ))}
+                  <div className="flex items-center justify-between pt-2 border-t border-black/5">
+                    <div className="flex gap-1.5 items-center">
+                      <button 
+                        onClick={handleGenerateAIFont}
+                        disabled={isGenerating}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[9px] font-bold uppercase tracking-widest transition-all ${
+                          generativeFontMap 
+                            ? 'bg-black text-white' 
+                            : 'bg-black/5 text-black hover:bg-black/10 disabled:opacity-50'
+                        }`}
+                      >
+                        {isGenerating ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
+                        {isGenerating ? 'Mushing...' : generativeFontMap ? 'Regenerate AI' : 'AI Font'}
+                      </button>
+
+                      <button 
+                        onClick={generateRandomFontMap}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[9px] font-bold uppercase tracking-widest transition-all ${
+                          isCustomFontActive 
+                            ? 'bg-black text-white' 
+                            : 'bg-black/5 text-black hover:bg-black/10'
+                        }`}
+                      >
+                        <Wand2 size={10} />
+                        {isCustomFontActive ? 'Regenerate Collection' : 'Random Collection'}
+                      </button>
+                      
+                      {(isCustomFontActive || generativeFontMap) && (
+                        <button 
+                          onClick={downloadFontMap}
+                          className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[9px] font-bold uppercase tracking-widest bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 transition-all"
+                        >
+                          <Download size={10} />
+                          Download
+                        </button>
+                      )}
                     </div>
-                    <p className="text-[10px] font-mono text-black/40 uppercase">Hover over letters to morph</p>
                     <button 
                       onClick={handleReset}
-                      className="text-[10px] font-bold uppercase tracking-widest flex items-center gap-1 hover:text-black/60 transition-colors"
+                      className="text-[9px] font-bold uppercase tracking-widest flex items-center gap-1 hover:text-black/60 transition-colors"
                     >
-                      <RefreshCw size={12} />
+                      <RefreshCw size={10} />
                       Reset
                     </button>
                   </div>
@@ -380,6 +512,12 @@ export default function App() {
       {/* Footer / Info */}
       <footer className="p-6 flex justify-between items-center text-[10px] font-mono text-black/40 uppercase tracking-widest border-t border-black/5">
         <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 px-3 py-1 bg-black/5 rounded-full">
+            <div className={`w-2 h-2 rounded-full ${generativeFontMap ? 'bg-emerald-500 animate-pulse' : isCustomFontActive ? 'bg-blue-500' : 'bg-black/20'}`} />
+            <span className="text-[10px] font-bold uppercase tracking-widest text-black/60">
+              {generativeFontMap ? 'AI MUSH ACTIVE' : isCustomFontActive ? 'COLLECTION MUSH' : 'STANDARD'}
+            </span>
+          </div>
           <span>Active Fonts: {FONTS.length}</span>
           <span>•</span>
           <span>Interactions: Realtime</span>
